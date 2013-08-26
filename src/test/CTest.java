@@ -21,25 +21,32 @@ public class CTest {
 	}
 	private void get()
 	{
-//		String md5 = "psbx.png";
+		String md5 = "4";
 //		byte[] content = sp.getPhoto(md5);
 		String info = "1#set4#zhaoyang-pc#photo/set4/block_1#0#41244";
-		byte[] content = sp.searchPhoto(info);
-		if(content == null)
-			return;
-		try {
-			FileOutputStream fos = new FileOutputStream("b.png");
-			fos.write(content);
-			fos.close();
+//		byte[] content = sp.searchPhoto(info);
+		for(int i = 0;i<100;i++)
+		{
 			
-		} catch (FileNotFoundException e) {
-			// TODO Auto-generated catch block
+			byte[] content = sp.getPhoto(md5);
+			System.out.println(content.length);
 			
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
 		}
+//		if(content == null)
+//			return;
+//		try {
+//			FileOutputStream fos = new FileOutputStream("b.png");
+//			fos.write(content);
+//			fos.close();
+//			
+//		} catch (FileNotFoundException e) {
+//			// TODO Auto-generated catch block
+//			
+//			e.printStackTrace();
+//		} catch (IOException e) {
+//			// TODO Auto-generated catch block
+//			e.printStackTrace();
+//		}
 		
 	}
 	
@@ -54,9 +61,10 @@ public class CTest {
 				fis = new FileInputStream(f);
 				byte[] content = new byte[fis.available()];
 				fis.read(content);
-				sp.storePhoto("set"+i,f.getName(),content);
-				System.out.println(f.getName());
+				String s =sp.storePhoto("set"+i,f.getName(),content);
+				System.out.println("in client store"+s);
 				i++;
+				System.out.println(f.getName());
 //				System.out.println(content.length);
 			} catch (FileNotFoundException e) {
 				// TODO Auto-generated catch block

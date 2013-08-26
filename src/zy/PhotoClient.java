@@ -1,17 +1,23 @@
 package zy;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.Enumeration;
+import java.util.Hashtable;
+
+import org.newsclub.net.unix.AFUNIXSocket;
+import org.newsclub.net.unix.AFUNIXSocketAddress;
 
 import redis.clients.jedis.Jedis;
-
+import common.ActionType;
 import common.RedisFactory;
 
 
@@ -20,9 +26,17 @@ public class PhotoClient {
 	private String redisHost;							//redis服务器地址
 	private int redisPort;								//端口号
 	private String confPath = "conf.txt";			//配置文件
-	private Socket s = null;						//与本地服务器连接的socket，用于写图片
-	private InputStream is;
-	private OutputStream os;					
+	private final File socketFile = new File(new File(System.
+			getProperty("java.io.tmpdir")), "junixsocket-test.sock");	//用于构造junixsocket,这个文件必须客户端和服务端一样
+	
+	private AFUNIXSocket storeSocket;				//用于写请求的socket
+	private DataInputStream storeis;
+	private DataOutputStream storeos;
+	
+	private Hashtable<String,Socket> socketHash;				//缓存与服务端的tcp连接,服务端名称到连接的映射
+	private Socket searchSocket;				//用于读请求的socket
+	private DataInputStream searchis;
+	private DataOutputStream searchos;
 	private Jedis jedis;
 	/**
 	 * 读取配置文件,进行必要初始化,并与服务器建立tcp连接
@@ -54,6 +68,8 @@ public class PhotoClient {
 			
 			jedis = RedisFactory.getNewInstance(redisHost, redisPort);
 			
+			socketHash = new Hashtable<String,Socket>();
+			
 		} catch (FileNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -72,17 +88,18 @@ public class PhotoClient {
 	 */
 	public String storePhoto(String set, String md5, byte[] content)
 	{
-		if(!jedis.exists(md5))		//图片不存在
+		String info = jedis.get(md5);
+		if(info == null)		//图片不存在
 		{
 			//只在第一次写的时候连接服务器
-			if(s == null)
+			if(storeSocket == null)
 			{
-				s = new Socket();
 				try {
-					s.connect(new InetSocketAddress("localhost",serverport));
-					is = s.getInputStream();
-//					isBr = new BufferedReader(new InputStreamReader(is));
-					os = s.getOutputStream();
+					storeSocket = AFUNIXSocket.newInstance();
+					storeSocket.connect(new AFUNIXSocketAddress(socketFile));
+					storeos = new DataOutputStream(storeSocket.getOutputStream());
+					storeis = new DataInputStream(storeSocket.getInputStream());
+					
 				} catch (IOException e1) {
 					// TODO Auto-generated catch block
 					e1.printStackTrace();
@@ -90,17 +107,22 @@ public class PhotoClient {
 			}
 			
 			try {
-				writeLineToServer("store",os);
-				writeLineToServer(set,os);
-				writeLineToServer(md5,os);
-				writeLineToServer(content.length+"",os);
-				os.write(content);
-				os.flush();
+				//action,set,md5,content的length写过去
+				byte[] header = new byte[4];
+				header[0] = ActionType.STORE;
+				header[1] = (byte) set.getBytes().length;
+				header[2] = (byte) md5.getBytes().length;
+				storeos.write(header);
+				storeos.writeInt(content.length);
 				
-				int count = Integer.parseInt(readline(is));
-				String info = new String(readBytes(count,is));
-//				System.out.println("in client, store:"+info);
-				return info;
+				//set,md5,content的实际内容写过去
+				storeos.write(set.getBytes());
+				storeos.write(md5.getBytes());
+				storeos.write(content);
+				storeos.flush();
+				int count = storeis.readInt();
+				String s = new String(readBytes(count,storeis));
+				return s;
 			} catch (IOException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
@@ -111,8 +133,8 @@ public class PhotoClient {
 		else
 		{
 			System.out.println(md5+" exists");
-			jedis.incr(md5+".ref");				
-			return jedis.get(md5);
+			jedis.incr("r."+md5);				
+			return info;
 		}
 	}
 	
@@ -126,131 +148,44 @@ public class PhotoClient {
 			return null;
 		}
 		else {
-			Socket getSocket = null;
-			InputStream getis = null;
-			OutputStream getos = null;
-			try {
-				String[] infos = info.split("#");
-				getSocket = new Socket(); // 读取图片时所用的socket
-				getSocket.connect(new InetSocketAddress(infos[2], serverport));
-				getis = getSocket.getInputStream();
-				getos = getSocket.getOutputStream();
-
-				writeLineToServer("get", getos);
-				writeLineToServer(md5, getos);
-
-				int count = Integer.parseInt(readline(getis));
-//				if (count == 0) {
-//					System.out.println("图片不存在");
-//					return null;
-//				}
-				// System.out.println(count);
-				return readBytes(count, getis);
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-				return null;
-			} finally {
-				try {
-					if(getis != null)
-						getis.close();
-					if(getos != null)
-						getos.close();
-					if(getSocket != null)
-						getSocket.close();
-				} catch (IOException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-				}
-
-			}
+			return searchPhoto(info);
 		}
-		
-		
 	}
 	
+	//把连接缓存起来,不要每次都重新建立连接,跟节点名字用一个哈希存储起来
 	public byte[] searchPhoto(String info)
 	{
-		Socket searchSocket = null;
-		InputStream searchis = null;
-		OutputStream searchos = null;
 		try {
 			String[] infos = info.split("#");
-			searchSocket = new Socket(); // 读取图片时所用的socket
-			searchSocket.connect(new InetSocketAddress(infos[2], serverport));
-			searchis = searchSocket.getInputStream();
-			searchos = searchSocket.getOutputStream();
+			if(socketHash.containsKey(infos[2]))
+				searchSocket = socketHash.get(infos[2]);
+			else
+			{				
+				searchSocket = new Socket(); // 读取图片时所用的socket
+				searchSocket.connect(new InetSocketAddress(infos[2], serverport));
+				socketHash.put(infos[2], searchSocket);
+			}
+			searchis =new DataInputStream(searchSocket.getInputStream());
+			searchos =new DataOutputStream(searchSocket.getOutputStream());
 
-			writeLineToServer("search", searchos);
-			writeLineToServer(info, searchos);
-
-			int count = Integer.parseInt(readline(searchis));
-//			if (count == 0) {
-//				System.out.println("图片不存在");
-//				return null;
-//			}
-			// System.out.println(count);
+			//action,info的length写过去
+			byte[] header = new byte[4];
+			header[0] = ActionType.SEARCH;
+			header[1] = (byte) info.getBytes().length;
+			searchos.write(header);
+			
+			//info的实际内容写过去
+			searchos.write(info.getBytes());
+			
+			int count = searchis.readInt();
 			return readBytes(count, searchis);
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 			return null;
-		} finally {
-			try {
-				if(searchis != null)
-					searchis.close();
-				if(searchos != null)
-					searchos.close();
-				if(searchSocket != null)
-					searchSocket.close();
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-
+		
 		}
 
-	}
-	
-	/**
-	 * 向指定输出流输出一行字符串
-	 * @param s
-	 * @param ostream
-	 * @throws IOException
-	 */
-	private void writeLineToServer(String s,OutputStream ostream) throws IOException {
-		StringBuffer sb = new StringBuffer(s);
-		sb.append("\n");			//\n的作用相当于分隔符
-		ostream.write(sb.toString().getBytes());
-	}
-	
-	/**
-	 * 从指定的输入流中读取一行
-	 * @param istream
-	 * @return
-	 */
-	private String readline(InputStream istream)
-	{
-		
-		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		
-		try {
-			byte[] b = new byte[1];
-			while(-1 != (istream.read(b)))
-			{
-				if(b[0] == '\n')
-					break;
-				else 
-					baos.write(b);
-			}
-			if(baos.size() == 0)
-				return null;
-			return new String(baos.toByteArray());
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-			return null;
-		}
 	}
 	
 	/**
@@ -260,50 +195,44 @@ public class PhotoClient {
 	 */
 	public byte[] readBytes(int count,InputStream istream)
 	{
-		
-		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		//这里注意不能直接new byte[count],因为可能跟输入流的缓冲大小有关,如果count大于缓冲区大小,则缓冲区直接会被读空而返回,但实际上还有
-		//想读的字节没有读出来.这时整个输入流位置指针就乱了,读不到自己想要的内容了.
-		//所以要一点一点的读,给tcp滑动窗口进行滑动的时间
-		byte[] buf = new byte[1024];			
-		int n;
+//		System.out.println("in client readBytes:"+count);
+		byte[] buf = new byte[count];			
+		int n = 0;
 		try {
-			while(count > buf.length)
+			while(count > n)
 			{
-				n = istream.read(buf);
-				baos.write(buf, 0, n);
-				count -= n;
-			}
-			
-			if(count>0)
-			{
-				buf = new byte[count];
-				istream.read(buf);
-				baos.write(buf);
+				n += istream.read(buf,n,count-n);
+//				System.out.println(n);
 			}
 			
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		return baos.toByteArray();
+		return buf;
 	}
 	
 	/**
 	 * 关闭流、套接字和与redis的连接
-	 * 只关闭写图片时与本地服务器交互的流和套接字，不关闭读图片时用到的流和套接字。
-	 * 读图片用的套接字，读完就关掉了。写图片的套接字不关闭，一直保留，因为可以重用
+	 * 用于读和写的套接字全部都关闭
 	 */
 	public void close()
 	{
 		try {
 			jedis.quit();
-			if(os != null)
-				os.close();
-			if(is != null)
-				is.close();
-			if(s != null)
+			if(storeos != null)
+				storeos.close();
+			if(storeis != null)
+				storeis.close();
+			if(storeSocket != null)
+				storeSocket.close();
+			
+			Enumeration<Socket> es = socketHash.elements();
+			while(es.hasMoreElements())
+			{
+				Socket s = es.nextElement();
 				s.close();
+			}
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();

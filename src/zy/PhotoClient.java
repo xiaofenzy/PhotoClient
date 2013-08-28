@@ -22,7 +22,7 @@ import common.RedisFactory;
 
 
 public class PhotoClient {
-	private int serverport;
+//	private int serverport;
 	private String redisHost;							//redis服务器地址
 	private int redisPort;								//端口号
 	private String confPath = "conf.txt";			//配置文件
@@ -54,8 +54,8 @@ public class PhotoClient {
 				else if(!line.startsWith("#"))		
 				{
 					String[] ss = line.split("=");
-					if(ss[0].equals("serverport"))
-						serverport = Integer.parseInt(ss[1]);
+//					if(ss[0].equals("serverport"))
+//						serverport = Integer.parseInt(ss[1]);
 					if(ss[0].equals("redisHost"))
 						redisHost = ss[1];
 					if(ss[0].equals("redisPort"))
@@ -162,7 +162,7 @@ public class PhotoClient {
 			else
 			{				
 				searchSocket = new Socket(); // 读取图片时所用的socket
-				searchSocket.connect(new InetSocketAddress(infos[2], serverport));
+				searchSocket.connect(new InetSocketAddress(infos[2], Integer.parseInt(infos[3])));
 				socketHash.put(infos[2], searchSocket);
 			}
 			searchis =new DataInputStream(searchSocket.getInputStream());

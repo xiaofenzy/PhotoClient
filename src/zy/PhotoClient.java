@@ -39,7 +39,7 @@ public class PhotoClient {
 	private DataOutputStream searchos;
 	private Jedis jedis;
 	/**
-	 * 读取配置文件,进行必要初始化,并与服务器建立tcp连接
+	 * 读取配置文件,进行必要初始化,并与redis服务器建立连接
 	 */
 	public PhotoClient()
 	{
@@ -54,8 +54,6 @@ public class PhotoClient {
 				else if(!line.startsWith("#"))		
 				{
 					String[] ss = line.split("=");
-//					if(ss[0].equals("serverport"))
-//						serverport = Integer.parseInt(ss[1]);
 					if(ss[0].equals("redisHost"))
 						redisHost = ss[1];
 					if(ss[0].equals("redisPort"))
@@ -121,6 +119,8 @@ public class PhotoClient {
 				storeos.write(content);
 				storeos.flush();
 				int count = storeis.readInt();
+				if(count == -1)
+					return jedis.get(md5);
 				String s = new String(readBytes(count,storeis));
 				return s;
 			} catch (IOException e) {
@@ -138,21 +138,24 @@ public class PhotoClient {
 		}
 	}
 	
-	
+	/**
+	 * 读取图片
+	 * @param md5
+	 * @return		md5代表的图片内容,如果图片不存在则返回长度为0的byte数组
+	 */
 	public byte[] getPhoto(String md5)
 	{
 		String info = jedis.get(md5);
 		if(info == null)
 		{
 			System.out.println("图片不存在");
-			return null;
+			return new byte[0];
 		}
 		else {
 			return searchPhoto(info);
 		}
 	}
 	
-	//把连接缓存起来,不要每次都重新建立连接,跟节点名字用一个哈希存储起来
 	public byte[] searchPhoto(String info)
 	{
 		try {

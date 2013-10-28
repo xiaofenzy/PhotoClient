@@ -1,7 +1,6 @@
-package common;
+package iie.mm.client;
 
 import redis.clients.jedis.Jedis;
-
 
 public class RedisFactory {
 	//专门用来操作redis中数据库0,它里面存储的是md5与存储时的返回值的映射
@@ -10,7 +9,6 @@ public class RedisFactory {
 	{
 		Jedis jedis = new Jedis(host,port);
 		return jedis;
-		
 	}
 	
 }

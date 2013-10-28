@@ -1,11 +1,7 @@
-package zy;
+package iie.mm.client;
 
-import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -17,19 +13,18 @@ import org.newsclub.net.unix.AFUNIXSocket;
 import org.newsclub.net.unix.AFUNIXSocketAddress;
 
 import redis.clients.jedis.Jedis;
-import common.ActionType;
-import common.RedisFactory;
 
 
 public class PhotoClient {
-//	private int serverport;
+	private int serverport;
 	private String redisHost;							//redis服务器地址
 	private int redisPort;								//端口号
-	private String confPath = "conf.txt";			//配置文件
-	private final File socketFile = new File(new File(System.
-			getProperty("java.io.tmpdir")), "junixsocket-test.sock");	//用于构造junixsocket,这个文件必须客户端和服务端一样
+//	private String confPath = "conf.txt";			//配置文件
+//	private final File socketFile = new File(new File(System.getProperty("java.io.tmpdir")), "junixsocket-test.sock");	//用于构造junixsocket,这个文件必须客户端和服务端一样
 	
-	private AFUNIXSocket storeSocket;				//用于写请求的socket
+//	private AFUNIXSocket storeSocket;				//用于写请求的socket
+	private Socket storeSocket;
+	
 	private DataInputStream storeis;
 	private DataOutputStream storeos;
 	
@@ -43,38 +38,13 @@ public class PhotoClient {
 	 */
 	public PhotoClient()
 	{
-		try {
-			BufferedReader br = new BufferedReader(new FileReader(confPath));
-			String line = "";
-			while(true)
-			{
-				line = br.readLine();
-				if(line == null)
-					break;
-				else if(!line.startsWith("#"))		
-				{
-					String[] ss = line.split("=");
-					if(ss[0].equals("redisHost"))
-						redisHost = ss[1];
-					if(ss[0].equals("redisPort"))
-						redisPort = Integer.parseInt(ss[1]);
-					
-				}
-			}
-			br.close();
-			//连接服务器
-			
-			jedis = RedisFactory.getNewInstance(redisHost, redisPort);
-			
-			socketHash = new Hashtable<String,Socket>();
-			
-		} catch (FileNotFoundException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+		
+		redisHost = ClientConf.getRedisHost();
+		redisPort = ClientConf.getRedisPort();
+		serverport = ClientConf.getServerPort();
+		//连接服务器
+		jedis = RedisFactory.getNewInstance(redisHost, redisPort);
+		socketHash = new Hashtable<String,Socket>();
 	}
 	
 	/**
@@ -86,17 +56,23 @@ public class PhotoClient {
 	 */
 	public String storePhoto(String set, String md5, byte[] content)
 	{
-		String info = jedis.get(md5);
+		String info = jedis.hget(set,md5);
 		if(info == null)		//图片不存在
 		{
 			//只在第一次写的时候连接服务器
 			if(storeSocket == null)
 			{
 				try {
-					storeSocket = AFUNIXSocket.newInstance();
-					storeSocket.connect(new AFUNIXSocketAddress(socketFile));
+//					storeSocket = AFUNIXSocket.newInstance();
+//					storeSocket.connect(new AFUNIXSocketAddress(socketFile));
+					storeSocket = new Socket();
+					storeSocket.setTcpNoDelay(true);
+					storeSocket.connect(new InetSocketAddress("localhost",serverport));
+					
 					storeos = new DataOutputStream(storeSocket.getOutputStream());
 					storeis = new DataInputStream(storeSocket.getInputStream());
+					
+					
 					
 				} catch (IOException e1) {
 					// TODO Auto-generated catch block
@@ -118,9 +94,9 @@ public class PhotoClient {
 				storeos.write(md5.getBytes());
 				storeos.write(content);
 				storeos.flush();
-				int count = storeis.readInt();
+				int count = storeis.readInt();			//时间大部分可以保持在个位数
 				if(count == -1)
-					return jedis.get(md5);
+					return jedis.hget(set,md5);
 				String s = new String(readBytes(count,storeis));
 				return s;
 			} catch (IOException e) {
@@ -132,23 +108,24 @@ public class PhotoClient {
 		}
 		else
 		{
-			System.out.println(md5+" exists");
-			jedis.incr("r."+md5);				
+			System.out.println(set+"."+md5+" exists");
+			jedis.hincrBy(set, "r."+md5, 1);				
 			return info;
 		}
 	}
 	
 	/**
-	 * 读取图片
-	 * @param md5
-	 * @return		md5代表的图片内容,如果图片不存在则返回长度为0的byte数组
+	 * 
+	 * @param set	redis中的键以set开头,因此读取图片要加上它的集合名
+	 * @param md5	
+	 * @return		图片内容,如果图片不存在则返回长度为0的byte数组
 	 */
-	public byte[] getPhoto(String md5)
+	public byte[] getPhoto(String set,String md5)
 	{
-		String info = jedis.get(md5);
+		String info = jedis.hget(set,md5);
 		if(info == null)
 		{
-			System.out.println("图片不存在");
+			System.out.println(set+"."+md5+" 不存在");
 			return new byte[0];
 		}
 		else {
@@ -168,6 +145,7 @@ public class PhotoClient {
 				searchSocket.connect(new InetSocketAddress(infos[2], Integer.parseInt(infos[3])));
 				socketHash.put(infos[2], searchSocket);
 			}
+			searchSocket.setTcpNoDelay(true);
 			searchis =new DataInputStream(searchSocket.getInputStream());
 			searchos =new DataOutputStream(searchSocket.getOutputStream());
 
@@ -179,8 +157,10 @@ public class PhotoClient {
 			
 			//info的实际内容写过去
 			searchos.write(info.getBytes());
-			
-			int count = searchis.readInt();
+			searchos.flush();
+//			long s = System.currentTimeMillis();
+			int count = searchis.readInt();					//时间几乎全部消耗在这,每次需要78,79ms
+//			System.out.println(System.currentTimeMillis()-s);
 			return readBytes(count, searchis);
 		} catch (IOException e) {
 			// TODO Auto-generated catch block

@@ -1,6 +1,6 @@
-#服务器ip地址和端口号
-serverport=12345
-
 #redis服务的地址和端口号
 redisHost=127.0.0.1
 redisPort=6379
+
+#服务器监听的端口
+serverport=11111

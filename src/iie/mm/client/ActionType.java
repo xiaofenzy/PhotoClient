@@ -1,4 +1,4 @@
-package common;
+package iie.mm.client;
 
 public class ActionType {
 	public static final byte STORE = 1;
